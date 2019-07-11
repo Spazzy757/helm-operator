@@ -1,0 +1,7 @@
+apiVersion: helm.helm.operator/v1
+kind: Chart
+metadata:
+  name: nginx
+  namespace: test
+spec:
+  chart: nginx-ingress

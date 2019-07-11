@@ -1,0 +1,7 @@
+apiVersion: helm.helm.operator/v1
+kind: Chart
+metadata:
+  name: chart-sample
+spec:
+  # Add fields here
+  foo: bar

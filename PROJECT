@@ -1,0 +1,7 @@
+version: "2"
+domain: helm.operator
+repo: github.com/Spazzy757/helm-operator
+resources:
+- group: helm
+  version: v1
+  kind: Chart
