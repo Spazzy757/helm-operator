@@ -16,7 +16,6 @@ limitations under the License.
 package v1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -39,17 +38,10 @@ type ChartSpec struct {
 type ChartStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-
-	// A list of resource created by chart.
-	// +optional
-	Resource []corev1.ObjectReference `json:"resource,omitempty"`
-
-	Status string `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=charts,scope=Cluster
-// +kubebuilder:subresource:status
+
 // Chart is the Schema for the charts API
 type Chart struct {
 	metav1.TypeMeta   `json:",inline"`

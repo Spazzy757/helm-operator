@@ -1,4 +1,4 @@
-apiVersion: helm.helm.operator/v1
+apiVersion: stable.helm.operator.io/v1
 kind: Chart
 metadata:
   name: nginx

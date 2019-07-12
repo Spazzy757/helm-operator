@@ -7,9 +7,9 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - helm.helm.operator
+  - stable.helm.operator.io
   resources:
-  - '*'
+  - charts
   verbs:
   - get
   - list
@@ -18,20 +18,8 @@ rules:
   - update
   - patch
   - delete
-- apiGroups: ["", "extensions", "apps"]
-  resources:
-  - '*'
-  verbs:
-  - '*'
-
 - apiGroups:
-  - '*'
-  resources:
-  - '*'
-  verbs:
-  - '*'
-- apiGroups:
-  - helm.helm.operator
+  - stable.helm.operator.io
   resources:
   - charts/status
   verbs:
@@ -39,9 +27,10 @@ rules:
   - update
   - patch
 - apiGroups:
-  - helm.helm.operator
+  - apps
   resources:
-  - configmaps
+  - statefulsets
+  - deployments
   verbs:
   - get
   - list
@@ -50,3 +39,10 @@ rules:
   - update
   - patch
   - delete
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets/status
+  - deployments/status
+  verbs:
+  - get
