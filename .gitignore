@@ -22,3 +22,9 @@ bin
 *.swp
 *.swo
 *~
+*.#*
+
+# Test generated files/folders
+nginx-ingress
+
+

@@ -19,37 +19,41 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	helmv1 "github.com/Spazzy757/helm-operator-copy/api/v1"
+	stablev1 "github.com/Spazzy757/helm-operator/api/v1"
 	"github.com/go-logr/logr"
+	"strings"
 	//"io"
 	corev1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	//"k8s.io/apimachinery/pkg/runtime/schema"
 	//ref "k8s.io/client-go/tools/reference"
+	//"k8s.io/apimachinery/pkg/runtime/schema"
+	ref "k8s.io/client-go/tools/reference"
 	"os/exec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 )
 
 // ChartReconciler reconciles a Chart object
 type ChartReconciler struct {
 	client.Client
-	Log logr.Logger
+	Log    logr.Logger
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=stable.helm.operator.io,resources=charts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=stable.helm.operator.io,resources=charts/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apps,resources=statefulsets;deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=statefulsets/status;deployments/status,verbs=get
-
+// +kubebuilder:rbac:groups=apps,resources=statefulsets;deployment,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets/status;deployment/status,verbs=get;list;watch;create;update;patch;delete
 func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	ctx := context.Background()
 	log := r.Log.WithValues("chart", req.NamespacedName)
-	instance := &helmv1.Chart{}
+	instance := &stablev1.Chart{}
 	// your logic here
 
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
@@ -65,55 +69,43 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		fmt.Println(err)
 	}
 	resources := bytes.Split(yamlString, []byte(`---`))
-	fmt.Printf("%T\n", resources)
 	// your logic here
-
 	for _, resource := range resources {
-		if strings.Contains(string(resource), "kind") && strings.Contains(string(resource), "Deployment") {
+		if strings.Contains(string(resource), "kind") {
 			// Decode the YAML to an object.
 			u := &unstructured.Unstructured{Object: map[string]interface{}{}}
-			//u.SetNamespace("test")
 			if err := yaml.Unmarshal(resource, &u.Object); err != nil {
 				fmt.Println(err)
 			}
 			if err := ctrl.SetControllerReference(instance, u, r.Scheme); err != nil {
 				return ctrl.Result{}, err
 			}
+			u.SetNamespace("default")
+			objRef, err := ref.GetReference(r.Scheme, u)
+			if err != nil {
+				log.Error(err, "unable to make reference to obj", "Object", u.GetName())
+			}
 			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
 				// we'll ignore not-found errors, since they can't be fixed by an immediate
 				// requeue (we'll need to wait for a new notification), and we can get them
 				// on deleted requests.
 				if apierrs.IsNotFound(err) {
-					log.V(1).Info(fmt.Sprintf("Creating %v", u.GetName()))
-					fmt.Printf("KIND: %v\n", u.GroupVersionKind())
 					if err := r.Create(ctx, u); err != nil {
-						// we'll ignore not-found errors, since they can't be fixed by an immediate
-						// requeue (we'll need to wait for a new notification), and we can get them
-						// on deleted requests.
-						log.Error(err, fmt.Sprintf("Error creating %v", u))
-						return ctrl.Result{}, ignoreNotFound(err)
+						log.Error(err, fmt.Sprintf("unable to apply %T", u))
+						return ctrl.Result{}, err
 					}
+					log.V(1).Info(fmt.Sprintf("Applying %T", u))
+					if !refInSlice(*objRef, instance.Status.Resource) {
+						instance.Status.Resource = append(instance.Status.Resource, *objRef)
+					}
+
 				} else {
-					log.Error(err, "unable to get object")
+					log.Error(err, "unable to get object, unknown error occured")
+					return ctrl.Result{}, err
 				}
 			}
 
-			//			obj, gvk, _ := unstructured.UnstructuredJSONScheme.Decode(ext.Raw, nil, nil)
-			//			if _, err := ctrl.CreateOrUpdate(ctx, r.Client, obj, func() error {
-			//				log.V(1).Info(fmt.Sprintf("Applying %T", obj))
-			//				objRef, err := ref.GetReference(r.Scheme, obj)
-			//				if err != nil {
-			//					log.Error(err, "unable to make reference to obj", "Object", obj)
-			//				}
-			//				instance.Status.Resource = append(instance.Status.Resource, *objRef)
-			//				return nil
-			//			}); err != nil {
-			//				log.Error(err, fmt.Sprintf("unable to apply %T", obj))
-			//				return ctrl.Result{}, err
-			//			}
-
 		}
-
 	}
 	instance.Status.Status = "Deployed"
 
@@ -138,9 +130,9 @@ func (r *ChartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 //	}
 //	return err
 //}
-func getChart(c *helmv1.Chart) {
+func getChart(c *stablev1.Chart) {
 	exec.Command("helm", "repo", "update")
-	cmd := exec.Command("helm", "fetch", "--untar", "--untardir=./charts", "stable/"+c.Spec.Chart)
+	cmd := exec.Command("helm", "fetch", "--untar", "--untardir=.", "stable/"+c.Spec.Chart)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
@@ -154,8 +146,8 @@ func getChart(c *helmv1.Chart) {
 }
 
 // template helm
-func templateChart(c *helmv1.Chart) ([]byte, error) {
-	cmd := exec.Command("helm", "template", "--name=test-chart", "--namespace=default", "./charts/"+c.Spec.Chart)
+func templateChart(c *stablev1.Chart) ([]byte, error) {
+	cmd := exec.Command("helm", "template", "--name=test-chart", "--namespace=default", c.Spec.Chart)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
