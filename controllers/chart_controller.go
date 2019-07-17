@@ -54,68 +54,111 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
 	log := r.Log.WithValues("chart", req.NamespacedName)
 	instance := &stablev1.Chart{}
+	finalizer := "helm.operator.finalizer.io"
+	forGroundFinalizer := "foregroundDeletion"
 	// your logic here
 
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
-		log.Error(err, "unable to fetch Chart")
-		// we'll ignore not-found errors, since they can't be fixed by an immediate
-		// requeue (we'll need to wait for a new notification), and we can get them
-		// on deleted requests.
 		return ctrl.Result{}, ignoreNotFound(err)
 	}
-	getChart(instance)
-	yamlString, err := templateChart(instance)
-	if err != nil {
-		fmt.Println(err)
-	}
-	resources := bytes.Split(yamlString, []byte(`---`))
-	// your logic here
-	for _, resource := range resources {
-		if strings.Contains(string(resource), "kind") {
-			// Decode the YAML to an object.
-			u := &unstructured.Unstructured{Object: map[string]interface{}{}}
-			if err := yaml.Unmarshal(resource, &u.Object); err != nil {
-				fmt.Println(err)
-			}
-			if err := ctrl.SetControllerReference(instance, u, r.Scheme); err != nil {
+	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !containsString(instance.ObjectMeta.Finalizers, finalizer) {
+			instance.ObjectMeta.Finalizers = append(instance.ObjectMeta.Finalizers, finalizer)
+			if err := r.Update(context.Background(), instance); err != nil {
 				return ctrl.Result{}, err
 			}
-			u.SetNamespace("default")
-			objRef, err := ref.GetReference(r.Scheme, u)
-			if err != nil {
-				log.Error(err, "unable to make reference to obj", "Object", u.GetName())
-			}
-			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
-				// we'll ignore not-found errors, since they can't be fixed by an immediate
-				// requeue (we'll need to wait for a new notification), and we can get them
-				// on deleted requests.
-				if apierrs.IsNotFound(err) {
-					if err := r.Create(ctx, u); err != nil {
-						log.Error(err, fmt.Sprintf("unable to apply %T", u))
-						return ctrl.Result{}, err
-					}
-					log.V(1).Info(fmt.Sprintf("Applying %T", u))
-					if !refInSlice(*objRef, instance.Status.Resource) {
-						instance.Status.Resource = append(instance.Status.Resource, *objRef)
-					}
-
-				} else {
-					log.Error(err, "unable to get object, unknown error occured")
+		}
+		getChart(instance)
+		yamlString, err := templateChart(instance)
+		if err != nil {
+			fmt.Println(err)
+		}
+		resources := bytes.Split(yamlString, []byte(`---`))
+		// your logic here
+		for _, resource := range resources {
+			if strings.Contains(string(resource), "kind") {
+				// Decode the YAML to an object.
+				u := &unstructured.Unstructured{Object: map[string]interface{}{}}
+				if err := yaml.Unmarshal(resource, &u.Object); err != nil {
+					fmt.Println(err)
+				}
+				if err := ctrl.SetControllerReference(instance, u, r.Scheme); err != nil {
 					return ctrl.Result{}, err
 				}
+				u.SetNamespace("default")
+
+				objRef, err := ref.GetReference(r.Scheme, u)
+				if err != nil {
+					log.Error(err, "unable to make reference", "Object", u.GetName())
+				}
+				if err := r.Client.Get(ctx, client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
+					// we'll ignore not-found errors, since they can't be fixed by an immediate
+					// requeue (we'll need to wait for a new notification), and we can get them
+					// on deleted requests.
+					if apierrs.IsNotFound(err) {
+						u.SetFinalizers([]string{forGroundFinalizer})
+						if err := r.Create(ctx, u); err != nil {
+							log.Error(err, fmt.Sprintf("unable to apply %T", u))
+							return ctrl.Result{}, err
+						}
+						log.V(1).Info(fmt.Sprintf("Applying %v", u.GroupVersionKind()))
+						if !refInSlice(*objRef, instance.Status.Resource) {
+							instance.Status.Resource = append(instance.Status.Resource, *objRef)
+						}
+
+					} else {
+						log.Error(err, "unable to get object, unknown error occured")
+						return ctrl.Result{}, err
+					}
+				}
+
+			}
+		}
+		instance.Status.Status = "Deployed"
+
+		if err := r.Status().Update(ctx, instance); err != nil {
+			log.Error(err, "unable to update Chart status")
+			return ctrl.Result{}, err
+		}
+		log.V(1).Info("reconciling the Chart")
+		return ctrl.Result{}, nil
+	} else {
+		if containsString(instance.ObjectMeta.Finalizers, finalizer) {
+			// our finalizer is present, so lets handle any external dependency
+			if err := r.deleteExternalResources(instance); err != nil {
+				// if fail to delete the external dependency here, return with error
+				// so that it can be retried
+				return ctrl.Result{}, err
 			}
 
+			// remove our finalizer from the list and update it.
+			instance.ObjectMeta.Finalizers = removeString(instance.ObjectMeta.Finalizers, finalizer)
+			if err := r.Update(context.Background(), instance); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	}
-	instance.Status.Status = "Deployed"
-
-	if err := r.Status().Update(ctx, instance); err != nil {
-		log.Error(err, "unable to update Chart status")
-		return ctrl.Result{}, err
-	}
-	log.V(1).Info("reconciling the configmap")
 	return ctrl.Result{}, nil
+}
 
+func (r *ChartReconciler) deleteExternalResources(instance *stablev1.Chart) error {
+	for _, resource := range instance.Status.Resource {
+		u := &unstructured.Unstructured{}
+		u.Object = map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name":      resource.Name,
+				"namespace": resource.Namespace,
+			},
+		}
+		u.SetGroupVersionKind(resource.GroupVersionKind())
+		if err := r.Get(context.Background(), client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
+			return err
+		}
+		if err := r.Delete(context.Background(), u); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ChartReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -124,12 +167,6 @@ func (r *ChartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-//func ignoreNotFound(err error) error {
-//	if apierrs.IsNotFound(err) {
-//		return nil
-//	}
-//	return err
-//}
 func getChart(c *stablev1.Chart) {
 	exec.Command("helm", "repo", "update")
 	cmd := exec.Command("helm", "fetch", "--untar", "--untardir=.", "stable/"+c.Spec.Chart)
@@ -178,4 +215,23 @@ func refInSlice(a corev1.ObjectReference, list []corev1.ObjectReference) bool {
 		}
 	}
 	return false
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+func removeString(slice []string, s string) (result []string) {
+	for _, item := range slice {
+		if item == s {
+			continue
+		}
+		result = append(result, item)
+	}
+	return
 }
