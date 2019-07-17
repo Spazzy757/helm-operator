@@ -21,6 +21,7 @@ import (
 	"fmt"
 	stablev1 "github.com/Spazzy757/helm-operator/api/v1"
 	"github.com/go-logr/logr"
+	"os"
 	"strings"
 	//"io"
 	corev1 "k8s.io/api/core/v1"
@@ -68,10 +69,12 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				return ctrl.Result{}, err
 			}
 		}
-		getChart(instance)
+		if err := getChart(instance); err != nil {
+			return ctrl.Result{}, err
+		}
 		yamlString, err := templateChart(instance)
 		if err != nil {
-			fmt.Println(err)
+			return ctrl.Result{}, err
 		}
 		resources := bytes.Split(yamlString, []byte(`---`))
 		// your logic here
@@ -91,6 +94,7 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				if err != nil {
 					log.Error(err, "unable to make reference", "Object", u.GetName())
 				}
+				fmt.Println(u.GroupVersionKind())
 				if err := r.Client.Get(ctx, client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
 					// we'll ignore not-found errors, since they can't be fixed by an immediate
 					// requeue (we'll need to wait for a new notification), and we can get them
@@ -101,7 +105,7 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 							log.Error(err, fmt.Sprintf("unable to apply %T", u))
 							return ctrl.Result{}, err
 						}
-						log.V(1).Info(fmt.Sprintf("Applying %v", u.GroupVersionKind()))
+						log.V(1).Info(fmt.Sprintf("Applying: %v", u.GroupVersionKind()))
 						if !refInSlice(*objRef, instance.Status.Resource) {
 							instance.Status.Resource = append(instance.Status.Resource, *objRef)
 						}
@@ -167,9 +171,17 @@ func (r *ChartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func getChart(c *stablev1.Chart) {
+func getChart(c *stablev1.Chart) error {
 	exec.Command("helm", "repo", "update")
-	cmd := exec.Command("helm", "fetch", "--untar", "--untardir=.", "stable/"+c.Spec.Chart)
+	if err := createIfNotExistDir("chart/" + c.Spec.Version); err != nil {
+		fmt.Printf("%v\n", err)
+	}
+	cmd := exec.Command("helm",
+		"fetch",
+		"--untar",
+		"--version="+c.Spec.Version,
+		"--untardir=chart/"+c.Spec.Version,
+		c.Spec.Repo+"/"+c.Spec.Chart)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
@@ -177,14 +189,21 @@ func getChart(c *stablev1.Chart) {
 	err := cmd.Run()
 	if err != nil {
 		fmt.Println(fmt.Sprint(err) + ": " + stderr.String())
-		return
+		return err
 	}
-	fmt.Println("Pulled Chart: " + c.Spec.Chart)
+	return nil
 }
 
 // template helm
 func templateChart(c *stablev1.Chart) ([]byte, error) {
-	cmd := exec.Command("helm", "template", "--name=test-chart", "--namespace=default", c.Spec.Chart)
+	values := buildValuesString(c)
+	fmt.Println(values)
+	cmd := exec.Command("helm",
+		"template",
+		"--name="+c.GetName(),
+		"--set="+"'"+values+"'",
+		"--namespace="+c.Spec.NameSpaceSelector,
+		"chart/"+c.Spec.Version+"/"+c.Spec.Chart)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
@@ -197,10 +216,16 @@ func templateChart(c *stablev1.Chart) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// Store in Configmaps
-// run the configs that have been generated
-// Store status of helm deployment
-
+func buildValuesString(c *stablev1.Chart) string {
+	var buildString string
+	for _, valuePair := range c.Spec.Values {
+		buildString += valuePair.Name + "=" + valuePair.Value + ","
+	}
+	if last := len(buildString) - 1; last >= 0 && buildString[last] == ',' {
+		buildString = buildString[:last]
+	}
+	return buildString
+}
 func ignoreNotFound(err error) error {
 	if apierrs.IsNotFound(err) {
 		return nil
@@ -234,4 +259,8 @@ func removeString(slice []string, s string) (result []string) {
 		result = append(result, item)
 	}
 	return
+}
+
+func createIfNotExistDir(dir string) error {
+	return os.MkdirAll(dir, os.ModePerm)
 }

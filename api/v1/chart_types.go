@@ -32,7 +32,15 @@ type ChartSpec struct {
 	Chart string `json:"chart"`
 
 	// Specify the repository for the chart, if empty, stable will be used
-	Repo string `json:"repo,omitempty"`
+	Repo              string  `json:"repo"`
+	Version           string  `json:"version"`
+	NameSpaceSelector string  `json:"nameSpaceSelector"`
+	Values            []Value `json:"values,omitempty"`
+}
+
+type Value struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // ChartStatus defines the observed state of Chart

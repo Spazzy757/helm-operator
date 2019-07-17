@@ -394,8 +394,24 @@ spec:
               description: Specify the repository for the chart, if empty, stable
                 will be used
               type: string
+            values:
+              items:
+                properties:
+                  name:
+                    type: string
+                  value:
+                    type: string
+                required:
+                - name
+                - value
+                type: object
+              type: array
+            version:
+              type: string
           required:
           - chart
+          - repo
+          - version
           type: object
         status:
           properties:

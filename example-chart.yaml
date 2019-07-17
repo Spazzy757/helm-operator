@@ -5,3 +5,11 @@ metadata:
   namespace: test
 spec:
   chart: nginx-ingress
+  repo: stable
+  version: 1.5.0
+  nameSpaceSelector: "default"
+  values:
+  - name: controller.name
+    value: foo
+  - name: controller.autoscaling.enabled
+    value: "true"
