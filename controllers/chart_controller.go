@@ -46,13 +46,14 @@ type ChartReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+var ctx = context.Background()
+
 // +kubebuilder:rbac:groups=stable.helm.operator.io,resources=charts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=stable.helm.operator.io,resources=charts/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets;deployment,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets/status;deployment/status,verbs=get;list;watch;create;update;patch;delete
 func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
-	ctx := context.Background()
 	log := r.Log.WithValues("chart", req.NamespacedName)
 	instance := &stablev1.Chart{}
 	finalizer := "helm.operator.finalizer.io"
@@ -79,49 +80,71 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		resources := bytes.Split(yamlString, []byte(`---`))
 		// your logic here
 		for _, resource := range resources {
-			if strings.Contains(string(resource), "kind") {
-				// Decode the YAML to an object.
-				u := &unstructured.Unstructured{Object: map[string]interface{}{}}
-				if err := yaml.Unmarshal(resource, &u.Object); err != nil {
-					fmt.Println(err)
-				}
-				if err := ctrl.SetControllerReference(instance, u, r.Scheme); err != nil {
+			// Helm sometimes templates just comments so skip these
+			if !strings.Contains(string(resource), "kind") {
+				continue
+			}
+			// Decode the YAML to an object.
+			u := &unstructured.Unstructured{Object: map[string]interface{}{}}
+			if err := yaml.Unmarshal(resource, &u.Object); err != nil {
+				fmt.Println(err)
+			}
+			// set controller reference
+			if err := ctrl.SetControllerReference(instance, u, r.Scheme); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// set namespace of the resource (by default helm does not template this out)
+			u.SetNamespace(instance.Spec.NameSpaceSelector)
+			// Get the reference of the resource to attach to the chart instance
+			objRef, err := ref.GetReference(r.Scheme, u)
+			if err != nil {
+				log.Error(err, "unable to make reference", "Object", u.GetName())
+			}
+			// Get Key to fetch resource if exists
+			key, err := client.ObjectKeyFromObject(u)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// Get resource
+			if err := r.Client.Get(ctx, key, u); err != nil {
+				// if error is anything but is not found, return error
+				if !apierrs.IsNotFound(err) {
+					log.Error(err, "unable to get object, unknown error occured")
 					return ctrl.Result{}, err
 				}
-				u.SetNamespace("default")
 
-				objRef, err := ref.GetReference(r.Scheme, u)
-				if err != nil {
-					log.Error(err, "unable to make reference", "Object", u.GetName())
+				// set finalizer of resource
+				u.SetFinalizers([]string{forGroundFinalizer})
+
+				// Create Object
+				if err := r.Create(ctx, u); err != nil {
+					log.Error(err, fmt.Sprintf("unable to apply %v", u.GroupVersionKind()))
+					instance.Status.Status = "Failed"
+					if err := r.UpdateStatus(instance); err != nil {
+						return ctrl.Result{}, err
+					}
+					return ctrl.Result{}, err
 				}
-				fmt.Println(u.GroupVersionKind())
-				if err := r.Client.Get(ctx, client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
-					// we'll ignore not-found errors, since they can't be fixed by an immediate
-					// requeue (we'll need to wait for a new notification), and we can get them
-					// on deleted requests.
-					if apierrs.IsNotFound(err) {
-						u.SetFinalizers([]string{forGroundFinalizer})
-						if err := r.Create(ctx, u); err != nil {
-							log.Error(err, fmt.Sprintf("unable to apply %T", u))
-							return ctrl.Result{}, err
-						}
-						log.V(1).Info(fmt.Sprintf("Applying: %v", u.GroupVersionKind()))
-						if !refInSlice(*objRef, instance.Status.Resource) {
-							instance.Status.Resource = append(instance.Status.Resource, *objRef)
-						}
+				log.V(1).Info(fmt.Sprintf("Applying: %v", u.GroupVersionKind()))
 
-					} else {
-						log.Error(err, "unable to get object, unknown error occured")
+				// Check if resource reference is attached to instance, if not add it
+				if !refInSlice(*objRef, instance.Status.Resource) {
+					instance.Status.Resource = append(instance.Status.Resource, *objRef)
+					if err := r.UpdateStatus(instance); err != nil {
 						return ctrl.Result{}, err
 					}
 				}
-
+				continue
 			}
+			continue
+			// Implement Patch if resource already exist
+			//log.V(1).Info(fmt.Sprintf("Updating: %v", u.GroupVersionKind()))
 		}
-		instance.Status.Status = "Deployed"
 
-		if err := r.Status().Update(ctx, instance); err != nil {
-			log.Error(err, "unable to update Chart status")
+		instance.Status.Status = "Deployed"
+		if err := r.UpdateStatus(instance); err != nil {
 			return ctrl.Result{}, err
 		}
 		log.V(1).Info("reconciling the Chart")
@@ -145,6 +168,7 @@ func (r *ChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
+// Deletes all resources attached to the instance
 func (r *ChartReconciler) deleteExternalResources(instance *stablev1.Chart) error {
 	for _, resource := range instance.Status.Resource {
 		u := &unstructured.Unstructured{}
@@ -154,11 +178,15 @@ func (r *ChartReconciler) deleteExternalResources(instance *stablev1.Chart) erro
 				"namespace": resource.Namespace,
 			},
 		}
-		u.SetGroupVersionKind(resource.GroupVersionKind())
-		if err := r.Get(context.Background(), client.ObjectKey{Namespace: u.GetNamespace(), Name: u.GetName()}, u); err != nil {
+		key, err := client.ObjectKeyFromObject(u)
+		if err != nil {
 			return err
 		}
-		if err := r.Delete(context.Background(), u); err != nil {
+		u.SetGroupVersionKind(resource.GroupVersionKind())
+		if err := r.Get(ctx, key, u); err != nil {
+			return err
+		}
+		if err := r.Delete(ctx, u); err != nil {
 			return err
 		}
 	}
@@ -171,9 +199,18 @@ func (r *ChartReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// Updates the status of the instance on the kube api server
+func (r *ChartReconciler) UpdateStatus(c *stablev1.Chart) error {
+	if err := r.Status().Update(ctx, c); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Fetch the chart specified on the instance
 func getChart(c *stablev1.Chart) error {
 	exec.Command("helm", "repo", "update")
-	if err := createIfNotExistDir("chart/" + c.Spec.Version); err != nil {
+	if err := os.MkdirAll("chart/"+c.Spec.Version, os.ModePerm); err != nil {
 		fmt.Printf("%v\n", err)
 	}
 	cmd := exec.Command("helm",
@@ -194,14 +231,13 @@ func getChart(c *stablev1.Chart) error {
 	return nil
 }
 
-// template helm
+// template out the yaml files from the chart
 func templateChart(c *stablev1.Chart) ([]byte, error) {
 	values := buildValuesString(c)
-	fmt.Println(values)
 	cmd := exec.Command("helm",
 		"template",
 		"--name="+c.GetName(),
-		"--set="+"'"+values+"'",
+		"--set="+values,
 		"--namespace="+c.Spec.NameSpaceSelector,
 		"chart/"+c.Spec.Version+"/"+c.Spec.Chart)
 	var out bytes.Buffer
@@ -216,6 +252,7 @@ func templateChart(c *stablev1.Chart) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// Builds a string representation of the values on the instance
 func buildValuesString(c *stablev1.Chart) string {
 	var buildString string
 	for _, valuePair := range c.Spec.Values {
@@ -226,6 +263,8 @@ func buildValuesString(c *stablev1.Chart) string {
 	}
 	return buildString
 }
+
+// Ignores not found error
 func ignoreNotFound(err error) error {
 	if apierrs.IsNotFound(err) {
 		return nil
@@ -233,6 +272,7 @@ func ignoreNotFound(err error) error {
 	return err
 }
 
+// Checks if an object ref is in a slice of object refs
 func refInSlice(a corev1.ObjectReference, list []corev1.ObjectReference) bool {
 	for _, b := range list {
 		if b == a {
@@ -242,6 +282,7 @@ func refInSlice(a corev1.ObjectReference, list []corev1.ObjectReference) bool {
 	return false
 }
 
+// Checks if string in a slice of strings
 func containsString(slice []string, s string) bool {
 	for _, item := range slice {
 		if item == s {
@@ -251,6 +292,7 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
+// Removes string from a slice of strings
 func removeString(slice []string, s string) (result []string) {
 	for _, item := range slice {
 		if item == s {
@@ -259,8 +301,4 @@ func removeString(slice []string, s string) (result []string) {
 		result = append(result, item)
 	}
 	return
-}
-
-func createIfNotExistDir(dir string) error {
-	return os.MkdirAll(dir, os.ModePerm)
 }

@@ -2,14 +2,21 @@ apiVersion: stable.helm.operator.io/v1
 kind: Chart
 metadata:
   name: nginx
-  namespace: test
 spec:
+# Chart Name 
   chart: nginx-ingress
+# Chart Repo (currently only supports stable and incubator)
   repo: stable
-  version: 1.5.0
+# Chart Version, this is required to enforce the inherint problem that comes from using tags like "latest"
+  version: 1.1.0
+# The namespace you would like to deploy your chart to
   nameSpaceSelector: "default"
+# List of values to apply to your chart (generally defined in your values.yaml)
   values:
   - name: controller.name
-    value: foo
+    value: "foo"
   - name: controller.autoscaling.enabled
     value: "true"
+  - name: controller.replicaCount
+    value: "4"
+    
