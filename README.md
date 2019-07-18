@@ -13,12 +13,18 @@ This operator is a project to try move Helm Charts into a more declarative patte
 apiVersion: stable.helm.operator.io/v1
 kind: Chart
 metadata:
+  # This willl be used in the generation of the resources
   name: nginx
 spec:
+  # Chart Name 
   chart: nginx-ingress
+  # Chart Repo (currently only supports stable and incubator)
   repo: stable
+  # Chart Version, this is required to enforce the inherint problem that comes from using tags like "latest"
   version: 1.1.0
+  # The namespace you would like to deploy your chart to
   nameSpaceSelector: "default"
+  # List of values to apply to your chart (generally defined in your values.yaml)
   values:
   - name: controller.name
     value: "foo"
