@@ -121,6 +121,12 @@ status:
     namespace: default
   status: Deployed
 ```
+
+To then delete this chart and all resources associated with this chart run:
+```
+kubectl delete chart nginx
+```
+
 ## ROADMAP:
 
 - Add tests
