@@ -51,12 +51,12 @@ var _ = Describe("Chart", func() {
 
 			key = types.NamespacedName{
 				Name:      "foo",
-				Namespace: "default",
+				Namespace: "",
 			}
 			created = &Chart{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "foo",
-					Namespace: "default",
+					Namespace: "",
 				}}
 
 			By("creating an API obj")

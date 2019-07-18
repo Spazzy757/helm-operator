@@ -390,6 +390,8 @@ spec:
             chart:
               description: Specify the chart you would like to be applied to the cluster
               type: string
+            nameSpaceSelector:
+              type: string
             repo:
               description: Specify the repository for the chart, if empty, stable
                 will be used
@@ -412,6 +414,7 @@ spec:
           - chart
           - repo
           - version
+          - nameSpaceSelector
           type: object
         status:
           properties:
