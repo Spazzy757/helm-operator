@@ -28,10 +28,24 @@ spec:
     value: "4"
 ```
 
+## Run Locally
+To run this operator locally (It will use your kube config defined by $KUBECONFIG)
+
+Install the CRDS 
+```
+make install
+```
+
+Run the operator
+```
+make run
+```
+
 ## ROADMAP:
 
 - Add tests
 - Add updating of resources
 - Add namespace to chart manifests
-- Allow for alternative repos (currently only supposrts stable)
+- Allow for alternative repos (currently only supports stable)
+- Allow for creation of namespace if it does not exist yet
 
