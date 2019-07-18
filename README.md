@@ -41,6 +41,86 @@ Run the operator
 make run
 ```
 
+## Run Example Chart
+To run the example that installs the nginx ingress
+```bash
+kubectl apply -f example-chart.yaml
+```
+
+To view the chart
+```bash
+kubectl get chart nginx -o yaml
+```
+This should give you a nice yaml output, whats important to notice is the list of resources that have been created due to this chart
+```yaml
+apiVersion: stable.helm.operator.io/v1
+kind: Chart
+metadata:
+    ...
+spec:
+  chart: nginx-ingress
+  nameSpaceSelector: default
+  repo: stable
+  values:
+  - name: controller.name
+    value: foo
+  - name: controller.autoscaling.enabled
+    value: "true"
+  - name: controller.replicaCount
+    value: "4"
+  version: 1.1.0
+status:
+  resource:
+  - apiVersion: policy/v1beta1
+    kind: PodDisruptionBudget
+    name: nginx-nginx-ingress-foo
+    namespace: default
+  - apiVersion: v1
+    kind: ConfigMap
+    name: nginx-nginx-ingress-foo
+    namespace: default
+  - apiVersion: v1
+    kind: ServiceAccount
+    name: nginx-nginx-ingress
+    namespace: default
+  - apiVersion: rbac.authorization.k8s.io/v1beta1
+    kind: ClusterRole
+    name: nginx-nginx-ingress
+    namespace: default
+  - apiVersion: rbac.authorization.k8s.io/v1beta1
+    kind: ClusterRoleBinding
+    name: nginx-nginx-ingress
+    namespace: default
+  - apiVersion: rbac.authorization.k8s.io/v1beta1
+    kind: Role
+    name: nginx-nginx-ingress
+    namespace: default
+  - apiVersion: rbac.authorization.k8s.io/v1beta1
+    kind: RoleBinding
+    name: nginx-nginx-ingress
+    namespace: default
+  - apiVersion: v1
+    kind: Service
+    name: nginx-nginx-ingress-foo
+    namespace: default
+  - apiVersion: v1
+    kind: Service
+    name: nginx-nginx-ingress-default-backend
+    namespace: default
+  - apiVersion: extensions/v1beta1
+    kind: Deployment
+    name: nginx-nginx-ingress-foo
+    namespace: default
+  - apiVersion: extensions/v1beta1
+    kind: Deployment
+    name: nginx-nginx-ingress-default-backend
+    namespace: default
+  - apiVersion: autoscaling/v2beta1
+    kind: HorizontalPodAutoscaler
+    name: nginx-nginx-ingress-foo
+    namespace: default
+  status: Deployed
+```
 ## ROADMAP:
 
 - Add tests
